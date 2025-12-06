@@ -345,8 +345,40 @@ async function connectProxmark() {
         updateConnectionStatus(true);
         logMessage('Connected to PROXMARK3');
         
+        // Wait a moment for the device to initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Clear any initial data in the buffer
+        try {
+            const decoder = new TextDecoder();
+            let initialData = '';
+            const startTime = Date.now();
+            while (Date.now() - startTime < 1000) {
+                const { value, done } = await proxmarkReader.read();
+                if (done) break;
+                if (value && value.length > 0) {
+                    initialData += decoder.decode(value, { stream: true });
+                }
+                // If we see a prompt, we're ready
+                if (initialData.includes('pm3>') || initialData.includes('proxmark3>')) {
+                    break;
+                }
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            if (initialData) {
+                logMessage('Initial data: ' + initialData.substring(0, 200));
+            }
+        } catch (e) {
+            // Ignore errors during initial read
+            logMessage('Note: Could not read initial data');
+        }
+        
         // Send initial command to check connection
-        await sendCommand('hw version');
+        try {
+            await sendCommand('hw version');
+        } catch (e) {
+            logMessage('Warning: Could not verify connection with hw version command');
+        }
         
     } catch (error) {
         if (error.name === 'NotFoundError') {
@@ -419,11 +451,18 @@ async function sendCommand(command) {
     }
 
     try {
-        // Send command with newline
+        // Send command with carriage return and newline (PROXMARK3 expects \r\n)
         const encoder = new TextEncoder();
         const data = encoder.encode(command + '\r\n');
         await proxmarkWriter.write(data);
+        
+        // Flush the write buffer
+        await proxmarkWriter.ready;
+        
         logMessage('> ' + command);
+        
+        // Small delay to let the device process the command
+        await new Promise(resolve => setTimeout(resolve, 100));
         
         // Read response
         return await readResponse();
@@ -433,7 +472,7 @@ async function sendCommand(command) {
     }
 }
 
-async function readResponse(timeout = 5000) {
+async function readResponse(timeout = 10000) {
     if (!proxmarkReader) {
         throw new Error('Reader not available');
     }
@@ -442,42 +481,90 @@ async function readResponse(timeout = 5000) {
     const startTime = Date.now();
     const decoder = new TextDecoder();
     let lastDataTime = Date.now();
-    const idleTimeout = 500; // Wait 500ms of no data before considering response complete
+    const idleTimeout = 300; // Wait 300ms of no data before considering response complete
+    let consecutiveEmptyReads = 0;
+    const maxEmptyReads = 5;
 
     try {
         while (Date.now() - startTime < timeout) {
-            const { value, done } = await proxmarkReader.read();
-            if (done) break;
-            
-            if (value && value.length > 0) {
-                response += decoder.decode(value, { stream: true });
-                lastDataTime = Date.now();
+            try {
+                const { value, done } = await proxmarkReader.read();
                 
-                // Check if we have a complete response (ends with pm3> or proxmark3> prompt)
-                if (response.includes('pm3>') || response.includes('proxmark3>')) {
-                    // Wait a bit more to ensure we got everything
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                if (done) {
+                    logMessage('Reader stream ended');
                     break;
                 }
-            }
-            
-            // If no data received for a while, check if we have a complete response
-            if (Date.now() - lastDataTime > idleTimeout && response.length > 0) {
-                // Check for prompt or error indicators
-                if (response.includes('pm3>') || response.includes('proxmark3>') || 
-                    response.includes('Error') || response.includes('OK')) {
+                
+                if (value && value.length > 0) {
+                    const decoded = decoder.decode(value, { stream: true });
+                    response += decoded;
+                    lastDataTime = Date.now();
+                    consecutiveEmptyReads = 0;
+                    
+                    // Check if we have a complete response (ends with prompt)
+                    // PROXMARK3 Iceman fork uses various prompt formats
+                    if (response.match(/pm3>\s*$/m) || 
+                        response.match(/proxmark3>\s*$/m) ||
+                        response.match(/\[usb\]\s*pm3>\s*$/m)) {
+                        // Got prompt, response is complete
+                        break;
+                    }
+                } else {
+                    consecutiveEmptyReads++;
+                    // If we've had several empty reads and some data, check if complete
+                    if (consecutiveEmptyReads >= maxEmptyReads && response.length > 0) {
+                        // Check if we have a prompt or clear completion indicator
+                        if (response.match(/pm3>\s*$/m) || 
+                            response.match(/proxmark3>\s*$/m) ||
+                            response.match(/\[usb\]\s*pm3>\s*$/m) ||
+                            response.toLowerCase().includes('done') ||
+                            response.toLowerCase().includes('ok')) {
+                            break;
+                        }
+                    }
+                }
+                
+                // If no data received for a while and we have some response, check if complete
+                if (Date.now() - lastDataTime > idleTimeout && response.length > 0) {
+                    // Check for various completion indicators
+                    if (response.match(/pm3>\s*$/m) || 
+                        response.match(/proxmark3>\s*$/m) ||
+                        response.match(/\[usb\]\s*pm3>\s*$/m) ||
+                        response.toLowerCase().includes('done') ||
+                        response.toLowerCase().includes('ok') ||
+                        response.toLowerCase().includes('error') ||
+                        response.toLowerCase().includes('failed')) {
+                        break;
+                    }
+                }
+                
+                // Small delay to prevent tight loop
+                await new Promise(resolve => setTimeout(resolve, 10));
+            } catch (readError) {
+                // If read error but we have some response, try to return it
+                if (response.length > 0) {
+                    logMessage('Read error but have partial response: ' + readError.message);
                     break;
                 }
+                throw readError;
             }
         }
         
-        // Decode any remaining buffered data
+        // Log the response
         if (response) {
-            logMessage(response);
+            // Clean up the response for logging (remove duplicate prompts if any)
+            const cleanedResponse = response.trim();
+            logMessage(cleanedResponse);
+        } else {
+            logMessage('(No response received)');
         }
+        
         return response;
     } catch (error) {
         logMessage('Error reading response: ' + error.message);
+        if (response) {
+            logMessage('Partial response: ' + response.substring(0, 200));
+        }
         throw error;
     }
 }

@@ -420,6 +420,7 @@ function updateConnectionStatus(connected) {
     const statusDiv = statusText.parentElement;
     const connectBtn = document.getElementById('connectBtn');
     const disconnectBtn = document.getElementById('disconnectBtn');
+    const testBtn = document.getElementById('testBtn');
     const readTagBtn = document.getElementById('readTagBtn');
     const writeTagBtn = document.getElementById('writeTagBtn');
     const writeTagFormBtn = document.getElementById('writeTagFormBtn');
@@ -430,6 +431,7 @@ function updateConnectionStatus(connected) {
         statusDiv.className = 'connection-status connected';
         connectBtn.style.display = 'none';
         disconnectBtn.style.display = 'inline-block';
+        testBtn.disabled = false;
         readTagBtn.disabled = false;
         writeTagBtn.disabled = false;
         writeTagFormBtn.disabled = false;
@@ -439,10 +441,45 @@ function updateConnectionStatus(connected) {
         statusDiv.className = 'connection-status disconnected';
         connectBtn.style.display = 'inline-block';
         disconnectBtn.style.display = 'none';
+        testBtn.disabled = true;
         readTagBtn.disabled = true;
         writeTagBtn.disabled = true;
         writeTagFormBtn.disabled = true;
     }
+}
+
+// Test connection with simple commands
+async function testConnection() {
+    if (!isConnected) {
+        alert('Please connect to PROXMARK3 first');
+        return;
+    }
+
+    logMessage('=== Starting Connection Test ===');
+    
+    const testCommands = [
+        'hw version',
+        'hw status',
+        'hf 14a reader'
+    ];
+
+    for (const cmd of testCommands) {
+        try {
+            logMessage(`\nTesting command: ${cmd}`);
+            const response = await sendCommand(cmd);
+            logMessage(`Response received (${response.length} chars)`);
+            if (response.length === 0) {
+                logMessage('WARNING: Empty response!');
+            }
+            // Wait between commands
+            await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+            logMessage(`ERROR with command "${cmd}": ${error.message}`);
+        }
+    }
+    
+    logMessage('\n=== Connection Test Complete ===');
+    alert('Test complete! Check the Device Log for results.');
 }
 
 async function sendCommand(command) {
@@ -550,13 +587,14 @@ async function readResponse(timeout = 10000) {
             }
         }
         
-        // Log the response
+        // Log the response with more detail
         if (response) {
             // Clean up the response for logging (remove duplicate prompts if any)
             const cleanedResponse = response.trim();
-            logMessage(cleanedResponse);
+            logMessage('< ' + cleanedResponse);
+            logMessage(`(Response length: ${response.length} bytes)`);
         } else {
-            logMessage('(No response received)');
+            logMessage('< (No response received)');
         }
         
         return response;

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PROXMARK3 for CFS</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PROXMARK3 for CFS</h1>
+            <p>Generate encrypted RFID tag commands for Creality K2 Plus and CFS</p>
+        </header>
+
+        <div class="warning">
+            <strong>WARNING!!</strong> No safeguards are implemented, so be careful with the data you enter. There are NO data checks!
+        </div>
+
+        <div class="info">
+            <p>You should end up with 4 commands (3 data blocks + 1 sector key), all with the same number of characters. If you don't, try refreshing the page to get default values and try again.</p>
+            <p><strong>Tag Type:</strong> MIFARE Classic 1K (16 sectors, 4 blocks per sector). Data is written to blocks 0, 1, and 2 of sector 0.</p>
+        </div>
+
+        <div id="proxmarkSection" class="proxmark-section">
+            <h3>PROXMARK3 Connection</h3>
+            <div id="serialApiWarning" class="info" style="display: none; margin-bottom: 15px;">
+                <strong>Note:</strong> Web Serial API is only supported in Chrome, Edge, or Opera browsers. Firefox and Safari users can still generate commands to copy/paste manually.
+            </div>
+            <div class="info" style="margin-bottom: 15px;">
+                <strong>Tag Type:</strong> MIFARE Classic 1K (1KB memory, 16 sectors, 4 blocks per sector).<br>
+                <strong>Note:</strong> Data is written to Sector 0, Blocks 0-2. Block 0 contains UID - ensure your tag allows writing to block 0.
+            </div>
+            <div class="form-group">
+                <div class="connection-status" id="connectionStatus">
+                    <span id="statusText">Not connected</span>
+                </div>
+                <div class="button-group">
+                    <button type="button" id="connectBtn" onclick="connectProxmark()">Connect to PROXMARK3</button>
+                    <button type="button" id="disconnectBtn" onclick="disconnectProxmark()" style="display: none;">Disconnect</button>
+                    <button type="button" id="readTagBtn" onclick="readTag()" disabled>Read Tag & Auto-fill UID</button>
+                    <button type="button" id="writeTagBtn" onclick="writeTag()" disabled>Write Tag</button>
+                </div>
+            </div>
+            <div id="proxmarkLog" class="proxmark-log" style="display: none;">
+                <h4>Device Log:</h4>
+                <textarea id="logOutput" readonly></textarea>
+                <button type="button" class="btn-small" onclick="clearLog()" style="margin-top: 10px;">Clear Log</button>
+            </div>
+        </div>
+
+        <form id="tagForm">
+            <div class="form-group">
+                <label for="batch">Batch (3):</label>
+                <input type="text" id="batch" maxlength="3" placeholder="000">
+            </div>
+
+            <div class="form-group">
+                <label for="date">Date (5):</label>
+                <div class="input-with-button">
+                    <input type="text" id="date" maxlength="5" placeholder="YYMDD (Use 1 digit for month)">
+                    <button type="button" class="btn-small" onclick="fillTodayDate()">Today</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="supplier">Supplier (4):</label>
+                <input type="text" id="supplier" maxlength="4" placeholder="0000">
+            </div>
+
+            <div class="form-group">
+                <label for="material">Material (5):</label>
+                <input type="text" id="material" maxlength="5" placeholder="04001" list="materials">
+                <datalist id="materials"></datalist>
+                <button type="button" class="btn-small" onclick="showMaterials()">View Default Materials</button>
+            </div>
+
+            <div class="form-group">
+                <label for="color">Color (7):</label>
+                <input type="text" id="color" maxlength="7" placeholder="0000000 (Prefix is 0, not #)">
+            </div>
+
+            <div class="form-group">
+                <label for="length">Length (4):</label>
+                <select id="length">
+                    <option value="">Select length...</option>
+                    <option value="0165">0165 (500g)</option>
+                    <option value="0330">0330 (1kg)</option>
+                    <option value="0660">0660 (2kg)</option>
+                    <option value="0990">0990 (3kg)</option>
+                    <option value="1320">1320 (4kg)</option>
+                    <option value="1650">1650 (5kg)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="serial">Serial (6):</label>
+                <div class="input-with-button">
+                    <input type="text" id="serial" maxlength="6" placeholder="000001 (Change this between spools)">
+                    <button type="button" class="btn-small" onclick="randomizeSerial()">Random</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="reserve">Reserve (14):</label>
+                <input type="text" id="reserve" maxlength="14" placeholder="00000000000000 (Not used yet)">
+            </div>
+
+            <div id="encryptionSection" class="encryption-section">
+                <h3>Tag Encryption (Required)</h3>
+                <div class="form-group">
+                    <label for="tagUid">Tag UID (8 hex digits): <span class="required">*</span></label>
+                    <input type="text" id="tagUid" maxlength="8" placeholder="12345678" pattern="[0-9A-Fa-f]{8}" required>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="radio" name="encryptionStatus" value="notEncrypted" checked>
+                        Tag is not encrypted yet
+                    </label>
+                    <label>
+                        <input type="radio" name="encryptionStatus" value="encrypted">
+                        Tag is already encrypted
+                    </label>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button type="button" onclick="generateEncrypted()">Generate Commands</button>
+                <button type="button" onclick="writeTag()" id="writeTagFormBtn" disabled>Write Tag to PROXMARK3</button>
+                <button type="button" onclick="resetForm()">Reset Form</button>
+            </div>
+        </form>
+
+        <div id="results" class="results" style="display: none;">
+            <div class="result-section">
+                <h3>ASCII Result:</h3>
+                <textarea id="asciiResult" readonly></textarea>
+            </div>
+
+            <div class="result-section">
+                <h3>PROXMARK3 Commands:</h3>
+                <textarea id="proxmarkCommands" readonly></textarea>
+                <button type="button" onclick="copyCommands()" class="btn-copy">Copy Commands</button>
+            </div>
+
+            <div id="sectorKeySection" class="result-section" style="display: none;">
+                <h3>Sector 1 Key:</h3>
+                <textarea id="sectorKey" readonly></textarea>
+            </div>
+        </div>
+
+        <div id="materialsModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close" onclick="closeMaterials()">&times;</span>
+                <h2>Default Materials</h2>
+                <p class="modal-warning">Copying/pasting these might add an additional space at the end - be careful!</p>
+                <div id="materialsList" class="materials-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+
